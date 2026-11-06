@@ -1,0 +1,32 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "FindIotEndpoint",
+      "Effect": "Allow",
+      "Action": "iot:DescribeEndpoint",
+      "Resource": "*"
+    },
+    {
+      "Sid": "PublishTruckPositions",
+      "Effect": "Allow",
+      "Action": "iot:Publish",
+      "Resource": "arn:aws:iot:us-east-1:ACCOUNT_ID:topic/trucks/location"
+    },
+    {
+      "Sid": "ReadAndResetTracker",
+      "Effect": "Allow",
+      "Action": [
+        "geo:GetDevicePositionHistory",
+        "geo:BatchDeleteDevicePositionHistory"
+      ],
+      "Resource": "arn:aws:geo:us-east-1:ACCOUNT_ID:tracker/DeliveryTracker"
+    },
+    {
+      "Sid": "CalculateRoadRoute",
+      "Effect": "Allow",
+      "Action": "geo-routes:CalculateRoutes",
+      "Resource": "*"
+    }
+  ]
+}
