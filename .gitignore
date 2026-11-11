@@ -1,0 +1,4 @@
+demo/aws_credentials
+demo/certs/
+__pycache__/
+.playwright-mcp/

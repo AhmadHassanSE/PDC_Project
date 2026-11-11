@@ -149,7 +149,7 @@ This is how real devices connect. It's needed for `--mode mqtt` and gives you so
 - Download: https://www.python.org/downloads/windows/ (during setup, **tick "Add python.exe to PATH"**)
 - Or, in PowerShell: `winget install -e --id Python.Python.3.12`
 
-**D2. Install the AWS CLI.**
+**D2. (Optional) Install the AWS CLI.** The demo doesn't need it; it is only handy for checking things by hand.
 - Download: https://awscli.amazonaws.com/AWSCLIV2.msi
 - Or, in PowerShell: `winget install -e --id Amazon.AWSCLI`
 
@@ -201,17 +201,14 @@ aws --version
 5. Click **Next**, name it `pdc-demo-policy`, and click **Create policy**.
 6. Go to **Security credentials → Create access key → Command Line Interface (CLI)**. Tick the confirmation box, click **Next**, then **Create access key**. **Download the .csv file.**
 
-**D4. Connect the AWS CLI to that user.**
-```powershell
-aws configure
+**D4. Give the scripts that user's access key.**
+The scripts read the key from a file, so you don't need `aws configure`. Create `demo\aws_credentials` (no file extension) with this content, using the values from the .csv:
 ```
-Enter the values when asked:
+[default]
+aws_access_key_id = AKIA...
+aws_secret_access_key = ...
 ```
-AWS Access Key ID:     (from the .csv)
-AWS Secret Access Key: (from the .csv)
-Default region name:   us-east-1
-Default output format: json
-```
+`.gitignore` keeps this file out of git. Never commit or share it.
 
 **D5. Install the Python libraries.**
 ```powershell
@@ -235,17 +232,20 @@ py dashboard.py
 ```
 Open **http://localhost:8000** in your browser.
 
-**Terminal 2: start the truck.**
+**Terminal 2: start the trucks.**
 ```powershell
 cd C:\Users\DELL\Desktop\PDC_Presentation\demo
 py truck_simulator.py
 ```
-The script clears the previous trip, asks **Amazon Location Routes** for a real road route, and sends a position every second. Within a few seconds the 🚚 starts moving on the map, leaving a blue trail. The trip takes about 2–3 minutes.
+The script clears the previous trips, asks **Amazon Location Routes** for a road route for each of the four trucks in `config.FLEET`, and sends one position per truck per second. The trucks leave a few seconds apart, each drawing a trail in its own colour. The longest trip takes about 5 minutes.
+
+On the map, every truck is tracked by default. Untick a truck in the fleet list to hide it, and click a truck to see its delivery sheet: driver, due time, cargo and live positions. To change the trucks, their destinations or their cargo, edit `FLEET` in `config.py`.
 
 **To show a real IoT device connection** (using the certificate from C3):
 ```powershell
 py truck_simulator.py --mode mqtt
 ```
+This opens one MQTT connection as `truck01` and relays all four trucks through it. In a real fleet every truck would have its own thing and certificate.
 
 **Optional extras during the demo:**
 - In the IoT console's **MQTT test client**, subscribe to `trucks/location` to show messages arriving live.
@@ -274,7 +274,7 @@ If the map goes blank, set `MAP_API_KEY = ""` again to switch back to OpenStreet
 | Problem | Fix |
 |---|---|
 | `py` or `aws` is not recognized | Close and reopen the terminal. Reinstall Python with "Add to PATH" ticked |
-| `Unable to locate credentials` | Run `aws configure` again (D4) |
+| `Unable to locate credentials` | Check that `demo\aws_credentials` exists and holds the access key (D4) |
 | `AccessDeniedException` / `not authorized` | `ACCOUNT_ID` wasn't replaced in the policy, or a resource is in a different region than `us-east-1` |
 | `ResourceNotFoundException` for the tracker | The tracker name must be exactly `DeliveryTracker`, in `us-east-1` |
 | Simulator says "Could not get a road route" | The demo still works, but the truck moves in a straight line. Check the `geo-routes:CalculateRoutes` permission and run `py -m pip install -U boto3` |
