@@ -1,9 +1,9 @@
-"""Simulated delivery truck: drives a route and sends its GPS position to AWS IoT Core.
+"""Simulated delivery fleet: every truck in config.FLEET drives its route and sends its GPS position to AWS IoT Core.
 
 Usage:
-    py truck_simulator.py               publish over HTTPS using your AWS CLI credentials
-    py truck_simulator.py --mode mqtt   connect over MQTT as the IoT thing, using its certificate
-    py truck_simulator.py --keep        keep the previous trip instead of clearing it first
+    py truck_simulator.py               publish over HTTPS using the keys in aws_credentials
+    py truck_simulator.py --mode mqtt   connect over MQTT as the IoT thing (one connection relays every truck)
+    py truck_simulator.py --keep        keep the previous trips instead of clearing it first
 """
 import argparse
 import json
@@ -29,13 +29,13 @@ def distance_m(a, b):
     return 2 * 6371000 * math.asin(math.sqrt(h))
 
 
-def get_route():
+def get_route(start=config.START, end=config.END):
     """Ask Amazon Location Routes for a road route; fall back to a straight line."""
     try:
         routes = boto3.client("geo-routes", region_name=config.REGION)
         resp = routes.calculate_routes(
-            Origin=[config.START[1], config.START[0]],  # AWS uses [longitude, latitude]
-            Destination=[config.END[1], config.END[0]],
+            Origin=[start[1], start[0]],  # AWS uses [longitude, latitude]
+            Destination=[end[1], end[0]],
             TravelMode="Car",
             LegGeometryFormat="Simple",
         )
@@ -44,11 +44,11 @@ def get_route():
             line.extend(leg["Geometry"]["LineString"])
         print(f"Road route from Amazon Location Routes: {len(line)} points")
         # The router snaps start/end to the nearest road it knows, so join the real points on.
-        return [config.START] + [(lat, lon) for lon, lat in line] + [config.END]
+        return [start] + [(lat, lon) for lon, lat in line] + [end]
     except Exception as e:
         print(f"Could not get a road route ({e})")
         print("Using a straight line instead.")
-        return [config.START, config.END]
+        return [start, end]
 
 
 def resample(route, step):
@@ -115,40 +115,57 @@ def mqtt_publisher():
     return publish
 
 
+def drive(truck, points, publish, wait):
+    """One truck's trip: leave after `wait` seconds, then publish a position, wait, repeat."""
+    time.sleep(wait)
+    print(f"{truck['id']} left for {truck['destination']}")
+    for i, (lat, lon) in enumerate(points, 1):
+        msg = {
+            "deviceId": truck["id"],
+            "latitude": round(lat, 6),
+            "longitude": round(lon, 6),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        publish(msg)
+        print(f"{truck['id']} [{i}/{len(points)}] sent {msg['latitude']}, {msg['longitude']}")
+        time.sleep(config.SEND_INTERVAL)
+    print(f"{truck['id']} arrived at {truck['destination']}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Simulated delivery truck")
+    parser = argparse.ArgumentParser(description="Simulated delivery fleet")
     parser.add_argument("--mode", choices=["https", "mqtt"], default="https")
-    parser.add_argument("--keep", action="store_true", help="don't clear the previous trip")
+    parser.add_argument("--keep", action="store_true", help="don't clear the previous trips")
     args = parser.parse_args()
 
     if not args.keep:
         try:
             geo = boto3.client("location", region_name=config.REGION)
             geo.batch_delete_device_position_history(
-                TrackerName=config.TRACKER_NAME, DeviceIds=[config.DEVICE_ID])
-            print("Cleared the previous trip from the tracker")
+                TrackerName=config.TRACKER_NAME, DeviceIds=[t["id"] for t in config.FLEET])
+            print("Cleared the previous trips from the tracker")
         except Exception as e:
-            print(f"Could not clear the previous trip ({e})")
+            print(f"Could not clear the previous trips ({e})")
 
-    points = resample(get_route(), config.STEP_METERS)
-    km = sum(distance_m(a, b) for a, b in zip(points, points[1:])) / 1000
-    print(f"Trip: {km:.1f} km in {len(points)} updates, about "
-          f"{len(points) * config.SEND_INTERVAL / 60:.1f} minutes")
+    trips = []
+    for truck in config.FLEET:
+        points = resample(get_route(config.START, truck["end"]), config.STEP_METERS)
+        km = sum(distance_m(a, b) for a, b in zip(points, points[1:])) / 1000
+        print(f"{truck['id']} to {truck['destination']}: {km:.1f} km in {len(points)} updates, about "
+              f"{len(points) * config.SEND_INTERVAL / 60:.1f} minutes")
+        trips.append((truck, points))
 
     publish = mqtt_publisher() if args.mode == "mqtt" else https_publisher()
 
+    # One thread per truck, so every truck reports once a second like independent devices would.
+    threads = [threading.Thread(target=drive, args=(truck, points, publish, i * config.DEPART_GAP), daemon=True)
+               for i, (truck, points) in enumerate(trips)]
+    for t in threads:
+        t.start()
     try:
-        for i, (lat, lon) in enumerate(points, 1):
-            msg = {
-                "deviceId": config.DEVICE_ID,
-                "latitude": round(lat, 6),
-                "longitude": round(lon, 6),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            publish(msg)
-            print(f"[{i}/{len(points)}] sent {msg['latitude']}, {msg['longitude']}")
-            time.sleep(config.SEND_INTERVAL)
-        print(f"Truck arrived at {config.END_NAME}")
+        while any(t.is_alive() for t in threads):
+            time.sleep(0.2)
+        print("All trucks have arrived")
     except KeyboardInterrupt:
         print("\nStopped")
 
